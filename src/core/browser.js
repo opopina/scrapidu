@@ -1,112 +1,85 @@
 const { chromium } = require('playwright');
-const ProxyRotator = require('./proxy-rotator');
-const UserAgentRotator = require('./user-agent-rotator');
 const logger = require('../utils/logger');
 
 class BrowserManager {
-  constructor() {
-    this.proxyRotator = new ProxyRotator();
-    this.userAgentRotator = new UserAgentRotator();
-  }
-
   async createBrowser() {
     try {
-      const proxy = await this.proxyRotator.getNextProxy();
-      const userAgent = this.userAgentRotator.getNextUserAgent();
-
-      const browser = await chromium.launch({
-        proxy: {
-          server: `${proxy.protocol}://${proxy.host}:${proxy.port}`,
-          username: proxy.username,
-          password: proxy.password
-        },
+      logger.info('Iniciando navegador...');
+      return await chromium.launch({
         headless: true,
         args: [
-          '--disable-web-security',
-          '--disable-features=IsolateOrigins,site-per-process',
-          `--user-agent=${userAgent}`
-        ]
-      }).catch(async (error) => {
-        if (error.message.includes("Executable doesn't exist")) {
-          logger.warn('Navegador no encontrado, intentando instalar...');
-          await this.installBrowser();
-          // Reintentar después de la instalación
-          return await chromium.launch({
-            proxy: {
-              server: `${proxy.protocol}://${proxy.host}:${proxy.port}`,
-              username: proxy.username,
-              password: proxy.password
-            },
-            headless: true,
-            args: [
-              '--disable-web-security',
-              '--disable-features=IsolateOrigins,site-per-process',
-              `--user-agent=${userAgent}`
-            ]
-          });
-        }
-        throw error;
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--disable-gpu',
+          '--window-size=1920,1080',
+        ],
+        ignoreHTTPSErrors: true,
+        timeout: 60000,
       });
-
-      return browser;
     } catch (error) {
-      logger.error('Error al crear el navegador:', error.message);
-      throw error;
-    }
-  }
-
-  async installBrowser() {
-    try {
-      const { execSync } = require('child_process');
-      logger.info('Instalando navegador Chromium...');
-      execSync('npx playwright install chromium', { stdio: 'inherit' });
-      logger.info('Navegador instalado correctamente');
-    } catch (error) {
-      logger.error('Error al instalar el navegador:', error.message);
+      logger.error('Error creando navegador:', error);
       throw error;
     }
   }
 
   async createPage(browser) {
-    const page = await browser.newPage();
-    
-    // Interceptor para detectar bloqueos
-    await page.route('**/*', async route => {
-      const response = await route.request().response();
-      if (response) {
-        const status = response.status();
-        if (status === 403 || status === 429) {
-          logger.warn(`Detectado bloqueo (Status: ${status}), cambiando proxy...`);
-          await this.handleBlock();
-        }
-      }
-      await route.continue();
-    });
-
-    // Manejar errores de red
-    page.on('requestfailed', request => {
-      const failure = request.failure();
-      if (failure) {
-        logger.warn(`Fallo en request: ${request.url()} - ${failure.errorText}`);
-        if (failure.errorText.includes('net::ERR_PROXY_CONNECTION_FAILED')) {
-          this.handleBlock();
-        }
-      }
-    });
-
-    // Configurar timeouts
-    await page.setDefaultNavigationTimeout(30000);
-    await page.setDefaultTimeout(30000);
-
-    return page;
-  }
-
-  async handleBlock() {
     try {
-      await this.proxyRotator.banCurrentProxy();
-      logger.info('Proxy baneado y cambiado exitosamente');
+      logger.info('Creando nueva página...');
+      const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        viewport: { width: 1920, height: 1080 },
+        locale: 'en-US',
+        timezoneId: 'America/New_York',
+        permissions: ['geolocation'],
+        geolocation: { latitude: 40.7128, longitude: -74.0060 }, // NYC coordinates
+        bypassCSP: true,
+        extraHTTPHeaders: {
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Sec-Fetch-Site': 'none',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-User': '?1',
+          'Sec-Fetch-Dest': 'document',
+        },
+        proxy: {
+          server: process.env.PROXY_SERVER,
+          username: process.env.PROXY_USER,
+          password: process.env.PROXY_PASS
+        },
+        // Rotación de User Agents
+        userAgent: this.getRandomUserAgent(),
+        // Evadir detección de automation
+        bypassCSP: true,
+        javaScriptEnabled: true,
+        hasTouch: true,
+        isMobile: Math.random() > 0.5,
+        deviceScaleFactor: Math.random() > 0.5 ? 1 : 2,
+      });
+
+      // Evadir fingerprinting
+      await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      });
+
+      const page = await context.newPage();
+      
+      // Interceptar y modificar requests
+      await page.route('**/*', async route => {
+        const request = route.request();
+        if (request.resourceType() === 'image' || request.resourceType() === 'stylesheet' || request.resourceType() === 'font') {
+          await route.abort();
+        } else {
+          await route.continue();
+        }
+      });
+
+      return page;
     } catch (error) {
-      logger.error('Error al manejar el bloqueo:', error.message);
+      logger.error('Error creando página:', error);
+      throw error;
     }
   }
 }

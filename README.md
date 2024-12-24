@@ -89,7 +89,11 @@ scrappy-doo/
 - Bull (sistema de colas)
 - Winston (logging)
 
-## 📝 Configuración Avanzada
+- `POST /api/scrape`: Encolar nuevos trabajos de scraping
+- `GET /api/jobs/:jobId`: Obtener estado de un trabajo
+- `GET /api/jobs`: Listar todos los trabajos
+- `POST /api/jobs/:jobId/retry`: Reintentar trabajo fallido
+- `DELETE /api/jobs/:jobId`: Cancelar trabajo
 
 ### Ajustes de Rate Limiting
 Modifica las siguientes variables en `.env`:
