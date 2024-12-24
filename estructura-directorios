@@ -1,0 +1,19 @@
+scrappy-doo/
+├── config/
+│   ├── proxies.json
+│   └── user-agents.json
+├── src/
+│   ├── core/
+│   │   ├── browser.js
+│   │   ├── proxy-rotator.js
+│   │   └── queue.js
+│   ├── scrapers/
+│   │   └── product-scraper.js
+│   ├── utils/
+│   │   ├── logger.js
+│   │   └── captcha-solver.js
+│   └── database/
+│       └── db.js
+├── .env
+├── package.json
+└── index.js 
