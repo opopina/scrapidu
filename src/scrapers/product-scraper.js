@@ -128,7 +128,7 @@ class ProductScraper {
     try {
       page = await this.getPage();
       
-      // Configurar timeouts más largos
+      // Configurar timeouts
       await page.setDefaultNavigationTimeout(this.navigationTimeout);
       await page.setDefaultTimeout(this.waitForTimeout);
 
@@ -139,48 +139,50 @@ class ProductScraper {
         });
       });
 
-      // Configurar headers más realistas
+      // Configurar headers
       await page.setExtraHTTPHeaders({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-User': '?1',
-        'Sec-Fetch-Dest': 'document'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        'Cache-Control': 'no-cache'
       });
 
-      // Navegar a la URL con mejor manejo de errores
-      try {
-        await page.goto(url, {
-          waitUntil: 'domcontentloaded',
-          timeout: this.navigationTimeout
+      // Navegar a la URL
+      await page.goto(url, {
+        waitUntil: 'networkidle0',
+        timeout: this.navigationTimeout
+      });
+
+      // Esperar por el selector especificado
+      if (options.waitForSelector) {
+        await page.waitForSelector(options.waitForSelector, {
+          timeout: options.timeout || this.waitForTimeout
         });
-      } catch (error) {
-        if (error.message.includes('timeout')) {
-          throw new Error(`⏱ Timeout navegando a ${url} después de ${this.navigationTimeout}ms`);
+      }
+
+      // Si hay una función evaluate personalizada, usarla
+      if (options.evaluate) {
+        return await options.evaluate(page, options.selectors);
+      }
+
+      // Si no, usar el scraping básico
+      const result = {};
+      for (const [key, selector] of Object.entries(options.selectors)) {
+        try {
+          const element = await page.$(selector);
+          if (element) {
+            result[key] = await page.evaluate(el => el.textContent.trim(), element);
+          }
+        } catch (error) {
+          logger.warn(`Error extrayendo ${key}: ${error.message}`);
+          result[key] = null;
         }
-        throw error;
       }
 
-      // Esperar a que la página cargue
-      try {
-        await page.waitForSelector('body', { 
-          timeout: this.waitForTimeout,
-          visible: true
-        });
-      } catch (error) {
-        logger.warn(`⚠️ Timeout esperando body en ${url}, continuando...`);
-      }
-
-      // Extraer datos
-      const result = await this.extractData(page, options);
       return result;
 
     } catch (error) {
+      logger.error(`Error scraping ${url}: ${error.message}`);
       throw error;
     } finally {
       if (page) {
