@@ -1,143 +1,192 @@
-const BrowserManager = require('../core/browser');
-const CaptchaSolver = require('../utils/captcha-solver');
-const db = require('../database/db');
+const puppeteer = require('puppeteer');
 const logger = require('../utils/logger');
+const UrlResolver = require('../services/url-resolver');
 
 class ProductScraper {
   constructor() {
-    this.browserManager = new BrowserManager();
-    this.captchaSolver = new CaptchaSolver();
+    this.browser = null;
+    this.pagePool = [];
+    this.maxRetries = 1;
+    this.navigationTimeout = 30000;
+    this.waitForTimeout = 15000;
+    this.maxConcurrent = 3;
   }
 
-  async scrape(url, options = {}) {
-    let browser;
+  async getPage() {
     try {
-      logger.info(`Iniciando scraping de ${url}`);
-      browser = await this.browserManager.createBrowser();
-      const page = await this.browserManager.createPage(browser);
+      // Inicializar navegador si no existe
+      if (!this.browser) {
+        this.browser = await puppeteer.launch({
+          headless: 'new',
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+            '--window-size=1920x1080',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process'
+          ]
+        });
+      }
 
-      logger.info(`Navegando a ${url}`);
-      
-      // Intentar cargar la página con diferentes estrategias
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          await page.goto(url, { 
-            waitUntil: attempt === 1 ? 'domcontentloaded' : 'networkidle',
-            timeout: 30000 * attempt // Incrementar timeout en cada intento
-          });
-          break;
-        } catch (error) {
-          if (attempt === 3) throw error;
-          logger.warn(`Intento ${attempt} fallido, reintentando...`);
-          await page.waitForTimeout(2000 * attempt);
+      // Reusar página del pool si hay disponible
+      const freePage = this.pagePool.find(p => !p.inUse);
+      if (freePage) {
+        freePage.inUse = true;
+        return freePage.page;
+      }
+
+      // Crear nueva página si no excedemos el máximo
+      if (this.pagePool.length < this.maxConcurrent) {
+        const page = await this.browser.newPage();
+        logger.info('Creando nueva página...');
+        this.pagePool.push({ page, inUse: true });
+        return page;
+      }
+
+      // Esperar máximo 3 segundos por una página libre
+      const startTime = Date.now();
+      while (Date.now() - startTime < 3000) {
+        const availablePage = this.pagePool.find(p => !p.inUse);
+        if (availablePage) {
+          availablePage.inUse = true;
+          return availablePage.page;
         }
+        await new Promise(r => setTimeout(r, 100));
       }
 
-      // Esperar a que la red esté inactiva
-      await page.waitForLoadState('networkidle', { timeout: 10000 })
-        .catch(() => logger.warn('Network no llegó a estar inactivo'));
-
-      // Esperar a que el contenido principal esté disponible
-      const mainSelector = options.selectors?.title || 'h1';
-      await Promise.race([
-        page.waitForSelector(mainSelector, { timeout: 15000 }),
-        page.waitForFunction(() => document.readyState === 'complete', { timeout: 15000 })
-      ]);
-
-      // Simular comportamiento humano
-      await this.simulateHumanBehavior(page);
-
-      // Hacer scroll para cargar contenido dinámico
-      await page.evaluate(() => {
-        window.scrollTo(0, document.body.scrollHeight / 2);
-        return new Promise(resolve => setTimeout(resolve, 1000));
-      });
-
-      logger.info('Extrayendo datos...');
-      const product = await this.extractProductData(page, options.selectors);
-      
-      if (!product.title && !product.rating && !product.description) {
-        throw new Error('No se pudo extraer ningún dato de la página');
-      }
-
-      if (options.saveToDb) {
-        logger.info('Guardando producto en base de datos...');
-        await this.saveProduct(product);
-      }
-
-      logger.info('Scraping completado exitosamente:', product);
-      return product;
+      throw new Error('No hay páginas disponibles después de 3 segundos');
     } catch (error) {
-      logger.error(`Error scraping ${url}: ${error.message}`);
+      logger.error('Error creando página:', error);
       throw error;
-    } finally {
-      if (browser) {
-        await browser.close();
-        logger.info('Navegador cerrado');
-      }
     }
   }
 
-  async extractProductData(page, selectors = {}) {
+  async releasePage(page) {
     try {
-      const defaultSelectors = {
-        title: 'h1',
-        rating: '[data-testid="hero-rating-bar__aggregate-rating__score"]',
-        description: '[data-testid="plot-xl"]'
+      const poolEntry = this.pagePool.find(p => p.page === page);
+      if (poolEntry) {
+        try {
+          await page.goto('about:blank', { timeout: 2000 });
+        } catch (error) {
+          logger.warn('Error navegando a about:blank, ignorando:', error.message);
+        }
+        poolEntry.inUse = false;
+      }
+    } catch (error) {
+      logger.error('Error liberando página:', error);
+    }
+  }
+
+  async extractData(page, options) {
+    try {
+      // Extraer datos básicos
+      const title = await page.title();
+      const url = page.url();
+
+      // Extraer metadatos
+      const meta = await page.evaluate(() => {
+        const description = document.querySelector('meta[name="description"]')?.content;
+        const keywords = document.querySelector('meta[name="keywords"]')?.content;
+        return { description, keywords };
+      });
+
+      // Extraer contenido principal
+      const content = await page.evaluate(() => {
+        const headings = Array.from(document.querySelectorAll('h1, h2, h3'))
+          .map(h => ({
+            level: h.tagName.toLowerCase(),
+            text: h.textContent.trim()
+          }));
+
+        const paragraphs = Array.from(document.querySelectorAll('p'))
+          .map(p => p.textContent.trim())
+          .filter(text => text.length > 50)
+          .slice(0, 5);
+
+        return { headings, paragraphs };
+      });
+
+      return {
+        url,
+        title,
+        meta,
+        content,
+        timestamp: new Date().toISOString()
       };
 
-      const finalSelectors = { ...defaultSelectors, ...selectors };
-
-      // Esperar a que al menos uno de los selectores esté presente
-      await Promise.race([
-        page.waitForSelector(finalSelectors.title),
-        page.waitForSelector(finalSelectors.rating),
-        page.waitForSelector(finalSelectors.description)
-      ]);
-
-      return await page.evaluate((sel) => {
-        const getData = (selector) => {
-          const element = document.querySelector(selector);
-          return element ? element.innerText.trim() : null;
-        };
-
-        return {
-          title: getData(sel.title),
-          rating: getData(sel.rating),
-          description: getData(sel.description),
-          url: window.location.href,
-          timestamp: new Date().toISOString()
-        };
-      }, finalSelectors);
     } catch (error) {
       logger.error('Error extrayendo datos:', error);
       throw error;
     }
   }
 
-  async saveProduct(product) {
-    await db.products.create(product);
-  }
+  async scrape(url, options = {}) {
+    let page;
+    try {
+      page = await this.getPage();
+      
+      // Configurar timeouts más largos
+      await page.setDefaultNavigationTimeout(this.navigationTimeout);
+      await page.setDefaultTimeout(this.waitForTimeout);
 
-  async updatePrice(productId, newPrice) {
-    await db.products.findByIdAndUpdate(productId, {
-      price: newPrice,
-      updatedAt: new Date()
-    });
-  }
+      // Configurar evasión de detección
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => undefined
+        });
+      });
 
-  async detectCaptcha(page) {
-    return await page.evaluate(() => {
-      return !!document.querySelector('.captcha-container');
-    });
-  }
+      // Configurar headers más realistas
+      await page.setExtraHTTPHeaders({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-User': '?1',
+        'Sec-Fetch-Dest': 'document'
+      });
 
-  async simulateHumanBehavior(page) {
-    // Scroll aleatorio
-    await page.evaluate(() => {
-      window.scrollTo(0, Math.random() * document.body.scrollHeight);
-    });
-    await page.waitForTimeout(1000 + Math.random() * 2000);
+      // Navegar a la URL con mejor manejo de errores
+      try {
+        await page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: this.navigationTimeout
+        });
+      } catch (error) {
+        if (error.message.includes('timeout')) {
+          throw new Error(`⏱ Timeout navegando a ${url} después de ${this.navigationTimeout}ms`);
+        }
+        throw error;
+      }
+
+      // Esperar a que la página cargue
+      try {
+        await page.waitForSelector('body', { 
+          timeout: this.waitForTimeout,
+          visible: true
+        });
+      } catch (error) {
+        logger.warn(`⚠️ Timeout esperando body en ${url}, continuando...`);
+      }
+
+      // Extraer datos
+      const result = await this.extractData(page, options);
+      return result;
+
+    } catch (error) {
+      throw error;
+    } finally {
+      if (page) {
+        await this.releasePage(page);
+      }
+    }
   }
 }
 

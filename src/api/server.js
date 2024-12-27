@@ -3,12 +3,15 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const ProductScraper = require('../scrapers/product-scraper');
 const logger = require('../utils/logger');
+const dns = require('dns').promises;
 
 class ScrapingAPI {
   constructor(queue) {
     this.app = express();
     this.scraper = new ProductScraper();
     this.queue = queue;
+    this.requestCache = new Map();
+    this.requestCounts = new Map();
     this.setupMiddleware();
     this.setupRoutes();
   }
@@ -17,12 +20,51 @@ class ScrapingAPI {
     this.app.use(cors());
     this.app.use(bodyParser.json());
     
-    // Middleware de autenticación
+    // Rate limiting super permisivo para pruebas
     this.app.use((req, res, next) => {
-      const apiKey = req.headers['x-api-key'];
-      if (req.path.startsWith('/api/') && apiKey !== process.env.API_KEY) {
-        return res.status(401).json({ error: 'API Key inválida' });
+      const ip = req.ip;
+      const now = Date.now();
+      const windowStart = now - 60000; // Ventana de 1 minuto
+
+      if (!this.requestCounts.has(ip)) {
+        this.requestCounts.set(ip, []);
       }
+
+      const requests = this.requestCounts.get(ip);
+      const recentRequests = requests.filter(time => time > windowStart);
+      this.requestCounts.set(ip, recentRequests);
+
+      // Configurar headers de rate limit
+      const limit = 60; // 60 requests por minuto
+      const remaining = Math.max(0, limit - recentRequests.length);
+      const reset = Math.ceil((windowStart + 60000) / 1000);
+
+      res.set({
+        'X-RateLimit-Limit': limit.toString(),
+        'X-RateLimit-Remaining': remaining.toString(),
+        'X-RateLimit-Reset': reset.toString(),
+        'X-RateLimit-Window': '60s'
+      });
+
+      if (recentRequests.length >= limit) {
+        const retryAfter = Math.ceil((windowStart + 60000 - now) / 1000);
+        res.set('Retry-After', retryAfter.toString());
+        
+        return res.status(429).json({
+          error: 'Demasiadas peticiones',
+          retryAfter,
+          message: `Por favor espere ${retryAfter} segundos antes de reintentar`,
+          limit,
+          remaining: 0,
+          reset
+        });
+      }
+
+      recentRequests.push(now);
+      next();
+    });
+
+    this.app.use((req, res, next) => {
       logger.info(`${req.method} ${req.path}`);
       next();
     });
@@ -45,22 +87,76 @@ class ScrapingAPI {
           });
         }
 
-        logger.info(`Iniciando scraping de ${urls.length} URLs`);
-
-        // Usar la cola para el scraping
-        const jobs = await Promise.all(
-          urls.map(url => this.queue.addUrl(url, config))
+        // Validar URLs antes de procesarlas
+        const validationResults = await Promise.all(
+          urls.map(async (url) => {
+            const sanitizedUrl = await sanitizeUrl(url);
+            return {
+              originalUrl: url,
+              isValid: Boolean(sanitizedUrl),
+              sanitizedUrl
+            };
+          })
         );
 
+        const validUrls = validationResults
+          .filter(result => result.isValid)
+          .map(result => result.sanitizedUrl);
+
+        if (validUrls.length === 0) {
+          return res.status(400).json({
+            error: 'No se encontraron URLs válidas para procesar',
+            validationResults
+          });
+        }
+
+        // Crear los jobs con timeout más corto
+        const jobs = await Promise.all(
+          validUrls.map(url => this.queue.addUrl(url, {
+            ...config,
+            timeout: config.timeout || 30000, // 30 segundos máximo
+            maxRetries: config.maxRetries || 1
+          }))
+        );
+
+        // Esperar a que todos los jobs terminen con timeout
+        const results = await Promise.race([
+          Promise.all(
+            jobs.map(job => new Promise(async (resolve) => {
+              try {
+                const result = await job.finished();
+                resolve({
+                  id: job.id,
+                  url: job.data.url,
+                  status: 'completed',
+                  result
+                });
+              } catch (error) {
+                resolve({
+                  id: job.id,
+                  url: job.data.url,
+                  status: 'failed',
+                  error: error.message
+                });
+              }
+            }))
+          ),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Timeout global')), 45000) // 45 segundos máximo total
+          )
+        ]);
+
         res.json({ 
-          success: true, 
-          jobIds: jobs.map(job => job.id)
+          success: true,
+          totalUrls: urls.length,
+          validUrls: validUrls.length,
+          validationResults,
+          jobs: results
         });
+
       } catch (error) {
         logger.error('Error en scraping:', error);
-        res.status(500).json({ 
-          error: error.message 
-        });
+        res.status(500).json({ error: error.message });
       }
     });
 
@@ -258,15 +354,17 @@ class ScrapingAPI {
     }
   }
 
-  start(port = process.env.API_PORT || 3030) {
+  async start(port = process.env.API_PORT || 3030) {
     try {
       const server = this.app.listen(port, () => {
         logger.info(`API escuchando en puerto ${port}`);
       });
 
+      await this.queue.processQueue(this.scraper);
+
       server.on('error', (error) => {
         if (error.code === 'EADDRINUSE') {
-          logger.error(`Puerto ${port} en uso. Por favor, configura un puerto diferente en .env (API_PORT)`);
+          logger.error(`Puerto ${port} en uso`);
           process.exit(1);
         } else {
           logger.error('Error iniciando servidor:', error);
@@ -288,6 +386,86 @@ class ScrapingAPI {
       });
       logger.info('Servidor detenido correctamente');
     }
+  }
+
+  generateRequestHash(urls) {
+    const crypto = require('crypto');
+    const data = JSON.stringify(urls.sort());
+    return crypto.createHash('md5').update(data).digest('hex');
+  }
+
+  isDuplicateRequest(hash) {
+    const now = Date.now();
+    const lastRequest = this.requestCache.get(hash);
+    
+    if (lastRequest && (now - lastRequest) < 5000) { // 5 segundos
+      return true;
+    }
+    return false;
+  }
+
+  registerRequest(hash) {
+    this.requestCache.set(hash, Date.now());
+    
+    // Limpiar entradas antiguas cada cierto tiempo
+    if (this.requestCache.size > 1000) {
+      const now = Date.now();
+      for (const [key, timestamp] of this.requestCache.entries()) {
+        if (now - timestamp > 300000) { // 5 minutos
+          this.requestCache.delete(key);
+        }
+      }
+    }
+  }
+}
+
+// Función para validar un dominio usando DNS
+async function isDomainValid(domain) {
+  try {
+    // Solo validar que el dominio tenga una estructura válida
+    if (domain.split('.').length < 2) {
+      return false;
+    }
+
+    const result = await dns.lookup(domain);
+    return Boolean(result?.address);
+  } catch {
+    return false;
+  }
+}
+
+// Función mejorada para limpiar y validar URLs
+async function sanitizeUrl(url) {
+  if (!url) return null;
+  
+  try {
+    // Asegurarse de que la URL tenga un protocolo
+    let urlStr = url.toLowerCase().trim();
+    if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+      urlStr = 'https://' + urlStr;
+    }
+
+    // Validar formato de URL
+    const urlObj = new URL(urlStr);
+    
+    // Validar que tenga un dominio válido
+    const domainParts = urlObj.hostname.split('.');
+    if (domainParts.length < 2) {
+      logger.warn(`URL inválida (dominio incompleto): ${url}`);
+      return null;
+    }
+
+    // Validar que el dominio exista
+    const isDomainReachable = await isDomainValid(urlObj.hostname);
+    if (!isDomainReachable) {
+      logger.warn(`Dominio no alcanzable: ${urlObj.hostname}`);
+      return null;
+    }
+
+    return urlObj.href;
+  } catch (error) {
+    logger.warn(`URL inválida: ${url} - ${error.message}`);
+    return null;
   }
 }
 

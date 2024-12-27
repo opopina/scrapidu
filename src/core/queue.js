@@ -1,9 +1,12 @@
 const Queue = require('bull');
 const logger = require('../utils/logger');
+const n8nService = require('../services/n8n-service');
 
 class ScrapingQueue {
   constructor() {
     this.queue = null;
+    this.concurrentJobs = 3; // Número de jobs paralelos
+    this.jobTimeout = 180000; // 3 minutos por job
   }
 
   async init() {
@@ -12,26 +15,12 @@ class ScrapingQueue {
         redis: {
           host: process.env.REDIS_HOST,
           port: process.env.REDIS_PORT
-        },
-        limiter: {
-          max: 5, // máximo de trabajos concurrentes
-          duration: 1000 // en un segundo
         }
       });
 
-      // Configurar eventos de la cola
-      this.queue.on('completed', (job) => {
-        logger.info(`Trabajo ${job.id} completado`);
-      });
-
-      this.queue.on('failed', (job, err) => {
-        logger.error(`Trabajo ${job.id} falló: ${err.message}`);
-      });
-
-      this.queue.on('error', (error) => {
-        logger.error('Error en la cola:', error);
-      });
-
+      // Limpiar jobs estancados al inicio
+      await this.cleanupStalledJobs();
+      
       logger.info('Cola de scraping inicializada correctamente');
       return this;
     } catch (error) {
@@ -40,60 +29,123 @@ class ScrapingQueue {
     }
   }
 
+  async cleanupStalledJobs() {
+    try {
+      // Obtener todos los jobs activos y estancados
+      const activeJobs = await this.queue.getActive();
+      const stalledJobs = activeJobs.filter(job => job.isStalled());
+
+      if (stalledJobs.length > 0) {
+        logger.info(`Limpiando ${stalledJobs.length} jobs estancados...`);
+        
+        for (const job of stalledJobs) {
+          try {
+            // Marcar como fallido y remover
+            await job.moveToFailed({
+              message: 'Job removido por estancamiento'
+            });
+            await job.remove();
+            logger.info(`Job ${job.id} removido por estancamiento`);
+          } catch (error) {
+            logger.error(`Error limpiando job ${job.id}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('Error en cleanupStalledJobs:', error);
+    }
+  }
+
   async addUrl(url, options = {}) {
     if (!this.queue) {
       throw new Error('Cola no inicializada. Llama a init() primero.');
     }
-    return this.queue.add('scrape-url', {
+    const job = await this.queue.add('scrape-url', {
       url,
       options
     });
+    await n8nService.notifyEvent('job_created', { 
+      jobId: job.id, 
+      url, 
+      options 
+    });
+    return job;
   }
 
   async processQueue(scraper) {
     if (!this.queue) {
-      throw new Error('Cola no inicializada. Llama a init() primero.');
+      throw new Error('Cola no inicializada');
     }
     
-    this.queue.process('scrape-url', async (job) => {
+    // Limpiar jobs antiguos al inicio
+    await this.cleanupOldJobs();
+    
+    // Mostrar estado inicial
+    const initialStatus = await this.getQueueStatus();
+    logger.showJobStatus(
+      initialStatus.active,
+      initialStatus.completed,
+      initialStatus.failed
+    );
+
+    this.queue.process('scrape-url', this.concurrentJobs, async (job) => {
       try {
         const { url, options } = job.data;
-        logger.info(`[Job ${job.id}] Iniciando scraping de URL: ${url}`);
+        logger.info(`🔄 Iniciando scraping de ${url}`, { jobId: job.id });
         
-        // Actualizar progreso
+        // Agregar progreso
         await job.progress(10);
-        
         const result = await scraper.scrape(url, options);
-        
-        // Actualizar progreso
         await job.progress(100);
         
-        logger.info(`[Job ${job.id}] Scraping completado exitosamente`);
         return result;
+
       } catch (error) {
-        logger.error(`[Job ${job.id}] Error en scraping:`, error);
+        // Categorizar errores
+        if (error.message.includes('timeout')) {
+          logger.error(`⏱ Timeout en ${url}`, { jobId: job.id });
+        } else if (error.message.includes('blocked')) {
+          logger.error(`🚫 Acceso bloqueado en ${url}`, { jobId: job.id });
+        } else {
+          logger.error(`❌ Error en ${url}: ${error.message}`, { jobId: job.id });
+        }
         throw error;
       }
     });
 
-    // Eventos adicionales para debugging
-    this.queue.on('active', (job) => {
-      logger.info(`[Job ${job.id}] ha comenzado a procesarse`);
+    // Eventos para monitoreo con mejor feedback
+    this.queue.on('completed', async (job, result) => {
+      logger.info(`✅ Job completado: ${job.data.url}`, { jobId: job.id });
+      await n8nService.notifyJobCompleted(job.id, result);
+      
+      const status = await this.getQueueStatus();
+      logger.showJobStatus(status.active, status.completed, status.failed);
     });
 
-    this.queue.on('completed', (job, result) => {
-      logger.info(`[Job ${job.id}] completado con resultado:`, result);
+    this.queue.on('failed', async (job, error) => {
+      logger.error(`❌ Job fallido: ${job.data.url}`, { jobId: job.id });
+      await n8nService.notifyJobFailed(job.id, error);
+      
+      const status = await this.getQueueStatus();
+      logger.showJobStatus(status.active, status.completed, status.failed);
     });
 
-    this.queue.on('failed', (job, error) => {
-      logger.error(`[Job ${job.id}] falló con error:`, error);
+    this.queue.on('stalled', async (job) => {
+      logger.warn(`⚠ Job estancado: ${job.data.url}`, { jobId: job.id });
+      await this.handleStalledJob(job);
     });
+  }
 
-    this.queue.on('stalled', (job) => {
-      logger.warn(`[Job ${job.id}] se ha estancado`);
-    });
-
-    logger.info('Procesador de cola configurado y listo');
+  async cleanupOldJobs() {
+    try {
+      const olderThan = Date.now() - (24 * 60 * 60 * 1000); // 24 horas
+      const oldJobs = await this.queue.clean(olderThan, 'completed');
+      const oldFailedJobs = await this.queue.clean(olderThan, 'failed');
+      
+      logger.info(`🧹 Limpiados ${oldJobs.length + oldFailedJobs.length} jobs antiguos`);
+    } catch (error) {
+      logger.error('Error limpiando jobs antiguos:', error);
+    }
   }
 
   async close() {
@@ -150,6 +202,16 @@ class ScrapingQueue {
       throw new Error('Cola no inicializada');
     }
     return await this.queue.getWaiting(start, end);
+  }
+
+  async getQueueStatus() {
+    return {
+      active: await this.queue.getActive(),
+      completed: await this.queue.getCompleted(),
+      failed: await this.queue.getFailed(),
+      delayed: await this.queue.getDelayed(),
+      waiting: await this.queue.getWaiting()
+    };
   }
 }
 

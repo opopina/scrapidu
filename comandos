@@ -1,0 +1,14 @@
+# Inicializar repositorio si no existe
+git init
+
+# Agregar archivos
+git add .
+
+# Crear commit inicial
+git commit -m "Versión inicial de ScrappyDoo - Scraper web avanzado" 
+
+# Agregar origen remoto (reemplaza URL con tu repositorio)
+git remote add origin https://github.com/tu-usuario/scrappy-doo.git
+
+# Push al repositorio
+git push -u origin main 

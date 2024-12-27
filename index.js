@@ -1,7 +1,6 @@
 require('dotenv').config();
 const ScrapingQueue = require('./src/core/queue');
 const ScrapingAPI = require('./src/api/server');
-const ProductScraper = require('./src/scrapers/product-scraper');
 const logger = require('./src/utils/logger');
 
 let queue;
@@ -9,27 +8,22 @@ let api;
 
 async function main() {
   try {
-    // Iniciar la cola de scraping
+    // Iniciar la cola de scraping una sola vez
     queue = new ScrapingQueue();
     await queue.init();
 
-    // Iniciar el procesamiento de la cola
-    const scraper = new ProductScraper();
-    await queue.processQueue(scraper);
-    logger.info('Procesamiento de cola iniciado');
-
-    // Iniciar la API
+    // Iniciar la API pasando la cola ya inicializada
     api = new ScrapingAPI(queue);
-    api.start(process.env.API_PORT || 3030);
-
+    await api.start();
     logger.info('ScrappyDoo iniciado correctamente');
+
   } catch (error) {
     logger.error('Error iniciando ScrappyDoo:', error);
     process.exit(1);
   }
 }
 
-// Manejo de cierre gracioso
+// Manejo de señales de cierre
 process.on('SIGTERM', async () => {
   logger.info('Recibida señal SIGTERM, cerrando aplicación...');
   await cleanup();

@@ -114,3 +114,24 @@ Este proyecto está bajo la Licencia MIT - ver el archivo `LICENSE` para más de
 
 ## ⚠️ Aviso Legal
 Este scraper debe usarse de manera ética y legal, respetando los términos de servicio de los sitios web y las leyes de protección de datos aplicables.
+
+## 🔌 Integración con n8n
+
+### Configuración
+1. Configura las variables de n8n en `.env`:
+```plaintext
+N8N_WEBHOOK_URL=http://localhost:5678/webhook/scrappy-doo
+N8N_API_KEY=tu_n8n_api_key
+N8N_EVENTS_WEBHOOK=http://localhost:5678/webhook/scrappy-events
+```
+
+### Eventos Disponibles
+- `job_created`: Cuando se crea un nuevo trabajo
+- `job_completed`: Cuando un trabajo se completa exitosamente
+- `job_failed`: Cuando un trabajo falla
+- `job_stalled`: Cuando un trabajo se estanca
+
+### Ejemplo de Workflow
+1. Crear un nodo "Webhook" en n8n
+2. Configurar la URL y la API key
+3. Procesar los datos recibidos según necesidad
