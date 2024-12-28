@@ -1,16 +1,17 @@
 # 🕷️ ScrappyDoo - Scraper Web Avanzado
 
 ## 📋 Descripción
-ScrappyDoo es un scraper web potente y flexible construido en Node.js, diseñado para extraer datos de sitios web dinámicos con características avanzadas anti-detección y alto rendimiento.
+ScrappyDoo es un scraper web potente y flexible construido en Node.js, diseñado para extraer y analizar datos de productos y servicios en múltiples marketplaces. Ideal para análisis de mercado, monitoreo de precios y estudio de competencia.
 
 ## ⭐ Características Principales
-- 🔄 Rotación automática de proxies
-- 👤 Rotación de User-Agents
+- 🔍 Búsqueda personalizada de cualquier producto o servicio
+- 📊 Análisis de precios en múltiples marketplaces
+- 📈 Análisis de competencia y tendencias
 - 🤖 Resolución automática de CAPTCHA
-- 📊 Sistema de colas para scraping masivo
-- 🛡️ Mecanismos anti-bloqueo
+- 🔄 Rotación automática de proxies y User-Agents
+- 🛡️ Mecanismos anti-bloqueo avanzados
 - 📦 Almacenamiento en MongoDB
-- 📝 Logging detallado
+- 🚀 Sistema de colas con Redis
 
 ## 🚀 Instalación
 
@@ -18,12 +19,13 @@ ScrappyDoo es un scraper web potente y flexible construido en Node.js, diseñado
 - Node.js >= 20.0.0
 - MongoDB
 - Redis
+- Git
 
 ### Pasos de Instalación
 
 ```bash
 # Clonar el repositorio
-git clone https://github.com/tuusuario/scrappy-doo.git
+git clone https://github.com/RicochetDeveloper/scrappy-doo.git
 
 # Entrar al directorio
 cd scrappy-doo
@@ -31,107 +33,121 @@ cd scrappy-doo
 # Instalar dependencias
 npm install
 
+# Configurar el entorno
+cp .env.example .env
+
 # Instalar navegador de Playwright
 npx playwright install chromium
 ```
 
-### Configuración
-1. Copia el archivo `.env.example` a `.env`:
-```bash
-cp .env.example .env
-```
-
-2. Configura las variables de entorno en el archivo `.env`:
+### Configuración Rápida
+1. Configura las variables de entorno en `.env`:
 ```plaintext
+# Bases de datos
+MONGODB_URI=mongodb://localhost:27017/scrappy-doo
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
-MONGODB_URI=mongodb://127.0.0.1:27017/scrappy-doo
+
+# API y Seguridad
+API_PORT=3030
+API_KEY=tu_api_key_aqui
 CAPTCHA_API_KEY=tu_api_key_2captcha
 
-# Configuraciones de seguridad
-NODE_ENV=production
-RATE_LIMIT=100
+# Configuración de Scraping
 CONCURRENT_SCRAPES=5
-RETRY_ATTEMPTS=3
 DELAY_BETWEEN_REQUESTS=2000
 ```
 
-## 🚀 Uso
+## 🎯 Uso Rápido
 
+### Análisis de Mercado
 ```bash
-# Iniciar el scraper
+# Analizar cualquier producto o servicio
+node src/tests/full-analysis-test.js "término de búsqueda"
+
+# Ejemplos:
+node src/tests/full-analysis-test.js "laptop gaming"
+node src/tests/full-analysis-test.js "zapatillas running"
+node src/tests/full-analysis-test.js "smartwatch"
+```
+
+### API REST
+```bash
+# Iniciar el servidor API
 npm start
 
-# Modo desarrollo
+# Modo desarrollo con recarga automática
 npm run dev
 ```
 
-## 📦 Estructura del Proyecto
+### Endpoints Principales
+- `POST /api/scrape`: Iniciar análisis de productos
+- `GET /api/jobs/:jobId`: Consultar estado de análisis
+- `GET /api/jobs`: Listar todos los análisis
+
+## 📊 Ejemplo de Respuesta
+```json
+{
+  "marketplace": "amazon",
+  "product": {
+    "title": "Laptop Gaming XYZ",
+    "price": "999.99",
+    "link": "https://..."
+  },
+  "analysis": {
+    "market": {
+      "position": "COMPETITIVO",
+      "trend": "CRECIENTE"
+    },
+    "competition": {
+      "level": "MEDIA",
+      "competitors": 8
+    },
+    "recommendations": [
+      "Monitorear precios semanalmente",
+      "Destacar características únicas"
+    ]
+  }
+}
+```
+
+## 🛠️ Desarrollo
+
+### Estructura del Proyecto
 ```
 scrappy-doo/
-├── config/                  # Archivos de configuración
-│   ├── proxies.json        # Lista de proxies
-│   └── user-agents.json    # User agents
 ├── src/
-│   ├── core/               # Funcionalidad principal
-│   ├── scrapers/           # Scrapers específicos
-│   ├── utils/              # Utilidades
-│   └── database/           # Capa de datos
-├── .env                    # Variables de entorno
-└── package.json
+│   ├── api/          # API REST
+│   ├── core/         # Lógica principal
+│   ├── scrapers/     # Scrapers específicos
+│   ├── services/     # Servicios de análisis
+│   └── utils/        # Utilidades
+├── config/           # Configuraciones
+└── tests/           # Pruebas
 ```
 
-## 🛠️ Tecnologías Utilizadas
-- Node.js
-- Playwright
-- MongoDB
-- Redis
-- Bull (sistema de colas)
-- Winston (logging)
+### Comandos de Desarrollo
+```bash
+# Pruebas
+npm test
 
-- `POST /api/scrape`: Encolar nuevos trabajos de scraping
-- `GET /api/jobs/:jobId`: Obtener estado de un trabajo
-- `GET /api/jobs`: Listar todos los trabajos
-- `POST /api/jobs/:jobId/retry`: Reintentar trabajo fallido
-- `DELETE /api/jobs/:jobId`: Cancelar trabajo
+# Lint
+npm run lint
 
-### Ajustes de Rate Limiting
-Modifica las siguientes variables en `.env`:
-- `RATE_LIMIT`: Peticiones por minuto
-- `CONCURRENT_SCRAPES`: Scrapes simultáneos
-- `DELAY_BETWEEN_REQUESTS`: Delay entre peticiones (ms)
-
-### Configuración de Proxies
-- Añade más proxies en `config/proxies.json`
-- El sistema rotará automáticamente entre ellos
-- Los proxies bloqueados se marcan automáticamente
+# Build
+npm run build
+```
 
 ## 🤝 Contribuir
-Las contribuciones son bienvenidas. Por favor, lee `CONTRIBUTING.md` para detalles sobre nuestro código de conducta y el proceso para enviarnos pull requests.
+¡Las contribuciones son bienvenidas! Por favor, lee [CONTRIBUTING.md](CONTRIBUTING.md) para detalles sobre nuestro proceso de pull requests.
 
 ## 📄 Licencia
-Este proyecto está bajo la Licencia MIT - ver el archivo `LICENSE` para más detalles.
+Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) para más detalles.
 
 ## ⚠️ Aviso Legal
-Este scraper debe usarse de manera ética y legal, respetando los términos de servicio de los sitios web y las leyes de protección de datos aplicables.
+Este software debe usarse de manera ética y legal, respetando los términos de servicio de los sitios web y las leyes de protección de datos aplicables.
 
-## 🔌 Integración con n8n
-
-### Configuración
-1. Configura las variables de n8n en `.env`:
-```plaintext
-N8N_WEBHOOK_URL=http://localhost:5678/webhook/scrappy-doo
-N8N_API_KEY=tu_n8n_api_key
-N8N_EVENTS_WEBHOOK=http://localhost:5678/webhook/scrappy-events
-```
-
-### Eventos Disponibles
-- `job_created`: Cuando se crea un nuevo trabajo
-- `job_completed`: Cuando un trabajo se completa exitosamente
-- `job_failed`: Cuando un trabajo falla
-- `job_stalled`: Cuando un trabajo se estanca
-
-### Ejemplo de Workflow
-1. Crear un nodo "Webhook" en n8n
-2. Configurar la URL y la API key
-3. Procesar los datos recibidos según necesidad
+## 🔌 Enlaces
+- [Documentación Completa](https://github.com/RicochetDeveloper/scrappy-doo/wiki)
+- [Reporte de Bugs](https://github.com/RicochetDeveloper/scrappy-doo/issues)
+- [Changelog](CHANGELOG.md)

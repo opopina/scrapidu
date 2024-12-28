@@ -10,18 +10,21 @@ const { connectDB } = require('../database/db');
 const mongoose = require('mongoose');
 const MultiMarketplaceFinder = require('../services/multi-marketplace-finder');
 
-async function runFullAnalysis() {
+// Obtener el término de búsqueda de los argumentos de línea de comandos
+const searchTerm = process.argv[2] || 'bicicleta montañera';
+
+async function runFullAnalysis(searchTerm) {
   try {
     // Conectar a MongoDB primero
     await connectDB();
     
-    logger.info('🔄 Iniciando análisis completo...\n');
+    logger.info(`🔄 Iniciando análisis completo para: "${searchTerm}"...\n`);
 
     // Búsqueda en múltiples marketplaces
     const searchResults = [];
 
     // 1. Búsqueda en marketplaces con MultiMarketplaceFinder
-    const marketplaceResults = await MultiMarketplaceFinder.findProducts('bicicleta montañera', {
+    const marketplaceResults = await MultiMarketplaceFinder.findProducts(searchTerm, {
       maxResults: 5,
       timeout: 60000,
       excludePatterns: ['usado', 'reparar']
@@ -31,10 +34,11 @@ async function runFullAnalysis() {
 
     // 2. Búsqueda en Amazon con UrlFinder
     logger.info('\n🔍 Buscando en Amazon...');
-    const amazonUrls = await UrlFinder.findUrls('https://www.amazon.com/-/es/s?k=bicicleta+montañera', {
+    const encodedTerm = encodeURIComponent(searchTerm);
+    const amazonUrls = await UrlFinder.findUrls(`https://www.amazon.com/-/es/s?k=${encodedTerm}`, {
       depth: 1,
       maxUrls: 5,
-      patterns: ['/dp/', 'bicicleta'],
+      patterns: ['/dp/'],
       excludePatterns: ['usado', 'reacondicionado'],
       timeout: 60000
     });
@@ -153,7 +157,7 @@ async function analyzeProduct(product) {
       }
     };
 
-    // An��lisis competitivo
+    // Análisis competitivo
     const competitiveAnalysis = {
       competitors: Math.floor(Math.random() * 5) + 5,
       recommendations: [
@@ -179,8 +183,14 @@ async function analyzeProduct(product) {
   }
 }
 
-// Ejecutar análisis
-runFullAnalysis().catch(error => {
+// Ejecutar análisis con el término de búsqueda
+if (!searchTerm) {
+  logger.error('Por favor proporciona un término de búsqueda.');
+  logger.info('Uso: node full-analysis-test.js "término de búsqueda"');
+  process.exit(1);
+}
+
+runFullAnalysis(searchTerm).catch(error => {
   logger.error('Error fatal:', error);
   process.exit(1);
 }); 
