@@ -6,8 +6,6 @@ const connectDB = async () => {
     const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/scrappy-doo';
     
     await mongoose.connect(mongoURI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
       serverSelectionTimeoutMS: 5000,
       connectTimeoutMS: 10000,
     });

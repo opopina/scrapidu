@@ -137,14 +137,52 @@ class ProductScraper {
         Object.defineProperty(navigator, 'webdriver', {
           get: () => undefined
         });
+        
+        // Ocultar webdriver
+        Object.defineProperty(navigator, 'languages', {
+          get: () => ['es-ES', 'es', 'en']
+        });
+
+        // Simular plataforma
+        Object.defineProperty(navigator, 'platform', {
+          get: () => 'Win32'
+        });
+
+        // Simular plugins
+        Object.defineProperty(navigator, 'plugins', {
+          get: () => [
+            {
+              0: {
+                type: "application/x-google-chrome-pdf",
+                suffixes: "pdf",
+                description: "Portable Document Format",
+                enabledPlugin: Plugin
+              },
+              description: "Portable Document Format",
+              filename: "internal-pdf-viewer",
+              length: 1,
+              name: "Chrome PDF Plugin"
+            }
+          ]
+        });
       });
 
       // Configurar headers
       await page.setExtraHTTPHeaders({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-        'Cache-Control': 'no-cache'
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1'
       });
 
       // Navegar a la URL

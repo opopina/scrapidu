@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: scrappy-doo-app
+    ports:
+      - "3030:3030"
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://mongodb:27017/scrappy-doo
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - .:/app
+      - /app/node_modules
+    networks:
+      - scrappy-network
+
+  mongodb:
+    image: mongo:latest
+    container_name: scrappy-doo-mongodb
+    ports:
+      - "27019:27017"
+    networks:
+      - scrappy-network
+
+  redis:
+    image: redis:alpine
+    container_name: scrappy-doo-redis
+    ports:
+      - "6380:6379"
+    networks:
+      - scrappy-network
+
+networks:
+  scrappy-network:
+    driver: bridge 

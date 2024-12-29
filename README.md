@@ -151,3 +151,61 @@ Este software debe usarse de manera ética y legal, respetando los términos de 
 - [Documentación Completa](https://github.com/RicochetDeveloper/scrappy-doo/wiki)
 - [Reporte de Bugs](https://github.com/RicochetDeveloper/scrappy-doo/issues)
 - [Changelog](CHANGELOG.md)
+
+## 🐳 Uso con Docker
+
+### Prerrequisitos
+- Docker
+- Docker Compose
+
+### Instalación con Docker
+
+```bash
+# Clonar el repositorio
+git clone https://github.com/RicochetDeveloper/scrappy-doo.git
+cd scrappy-doo
+
+# Construir y levantar los contenedores
+docker-compose up -d
+
+# Ver logs
+docker-compose logs -f
+```
+
+### Comandos Docker Útiles
+
+```bash
+# Detener los contenedores
+docker-compose down
+
+# Reiniciar un servicio específico
+docker-compose restart app
+
+# Ver logs de un servicio específico
+docker-compose logs -f app
+
+# Ejecutar comandos dentro del contenedor
+docker-compose exec app npm test
+docker-compose exec app node src/tests/full-analysis-test.js "laptop gaming"
+
+# Limpiar volúmenes (¡cuidado! esto borrará los datos)
+docker-compose down -v
+```
+
+### Estructura Docker
+```
+scrappy-doo/
+├── 🐳 Dockerfile          # Configuración del contenedor principal
+├── 🐳 docker-compose.yml  # Configuración de servicios
+├── 📝 .dockerignore       # Archivos ignorados en el build
+└── 📦 ...                 # Resto de archivos del proyecto
+```
+
+### Servicios Dockerizados
+- **App**: Aplicación principal (Node.js + Playwright)
+- **MongoDB**: Base de datos principal
+- **Redis**: Sistema de colas y caché
+
+### Volúmenes Persistentes
+- `mongodb_data`: Datos de MongoDB
+- `redis_data`: Datos de Redis
